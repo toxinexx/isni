@@ -1,12 +1,32 @@
 "use client";
 
-import { useRef, useMemo, useEffect } from "react";
+import { useRef, useMemo, useEffect, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
-function Particles({ count = 500, mouse }: { count?: number; mouse: React.RefObject<{ x: number; y: number }> }) {
+// Detect mobile device
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(
+        /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+        window.innerWidth < 768
+      );
+    };
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
+
+  return isMobile;
+}
+
+function Particles({ count, mouse, isMobile }: { count: number; mouse: React.RefObject<{ x: number; y: number }>; isMobile: boolean }) {
   const mesh = useRef<THREE.Points>(null);
   const velocities = useRef<Float32Array>(new Float32Array(count * 3));
+  const frameSkip = useRef(0);
 
   const [positions, originalPositions, colors] = useMemo(() => {
     const pos = new Float32Array(count * 3);
@@ -51,11 +71,22 @@ function Particles({ count = 500, mouse }: { count?: number; mouse: React.RefObj
   useFrame((state) => {
     if (!mesh.current) return;
 
+    // Skip frames on mobile for better performance
+    if (isMobile) {
+      frameSkip.current++;
+      if (frameSkip.current % 2 !== 0) return; // Run at 30fps on mobile
+    }
+
     const time = state.clock.getElapsedTime();
 
     // Rotate particles slowly
     mesh.current.rotation.y = time * 0.05;
     mesh.current.rotation.x = time * 0.03;
+
+    // Skip per-particle updates on mobile - just rotate
+    if (isMobile) {
+      return;
+    }
 
     // Get position attribute
     const posAttr = mesh.current.geometry.attributes.position;
@@ -123,10 +154,13 @@ function Particles({ count = 500, mouse }: { count?: number; mouse: React.RefObj
   );
 }
 
-function Scene({ mouse }: { mouse: React.RefObject<{ x: number; y: number }> }) {
+function Scene({ mouse, isMobile }: { mouse: React.RefObject<{ x: number; y: number }>; isMobile: boolean }) {
   const { camera } = useThree();
 
   useFrame(() => {
+    // Skip camera movement on mobile
+    if (isMobile) return;
+
     if (mouse.current) {
       camera.position.x = THREE.MathUtils.lerp(
         camera.position.x,
@@ -141,11 +175,15 @@ function Scene({ mouse }: { mouse: React.RefObject<{ x: number; y: number }> }) 
     }
   });
 
-  return <Particles mouse={mouse} />;
+  // Use fewer particles on mobile (150 vs 500)
+  const particleCount = isMobile ? 150 : 500;
+
+  return <Particles count={particleCount} mouse={mouse} isMobile={isMobile} />;
 }
 
 export default function ParticleField() {
   const mouse = useRef({ x: 0, y: 0 });
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -163,11 +201,16 @@ export default function ParticleField() {
     <div className="fixed inset-0 z-0">
       <Canvas
         camera={{ position: [0, 0, 5], fov: 75 }}
-        gl={{ antialias: true, alpha: true }}
+        gl={{
+          antialias: !isMobile, // Disable antialiasing on mobile
+          alpha: true,
+          powerPreference: "high-performance"
+        }}
+        dpr={isMobile ? 1 : [1, 2]} // Lower pixel ratio on mobile
         style={{ background: "transparent" }}
       >
         <ambientLight intensity={0.5} />
-        <Scene mouse={mouse} />
+        <Scene mouse={mouse} isMobile={isMobile} />
       </Canvas>
     </div>
   );
