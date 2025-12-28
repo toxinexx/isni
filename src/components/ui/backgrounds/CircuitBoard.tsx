@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { motion } from "framer-motion";
 
 interface Node {
@@ -23,27 +23,36 @@ export default function CircuitBoard() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [pulses, setPulses] = useState<Pulse[]>([]);
   const pulseIdRef = useRef(0);
+  const animationRef = useRef<number>();
+
+  // Create node lookup map for O(1) access
+  const nodeMap = useMemo(() => {
+    const map = new Map<number, Node>();
+    nodes.forEach(node => map.set(node.id, node));
+    return map;
+  }, [nodes]);
+
+  const getNodeById = useCallback((id: number) => nodeMap.get(id), [nodeMap]);
 
   // Generate circuit nodes
   useEffect(() => {
     const generateNodes = () => {
       const newNodes: Node[] = [];
-      const gridSize = 120;
+      const gridSize = 150; // Larger grid = fewer nodes
       const cols = Math.ceil(window.innerWidth / gridSize) + 1;
       const rows = Math.ceil(window.innerHeight / gridSize) + 1;
 
       let id = 0;
       for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
-          // Add some randomness to position
           const x = col * gridSize + (Math.random() - 0.5) * 40;
           const y = row * gridSize + (Math.random() - 0.5) * 40;
           newNodes.push({ id: id++, x, y, connections: [] });
         }
       }
 
-      // Create connections (circuit paths)
-      newNodes.forEach((node, i) => {
+      // Create connections (circuit paths) - limit connections
+      newNodes.forEach((node) => {
         const possibleConnections = newNodes.filter(
           (n) =>
             n.id !== node.id &&
@@ -51,8 +60,8 @@ export default function CircuitBoard() {
             Math.abs(n.y - node.y) < gridSize * 1.5
         );
 
-        // Connect to 1-3 nearby nodes
-        const numConnections = Math.floor(Math.random() * 3) + 1;
+        // Connect to 1-2 nearby nodes (reduced from 1-3)
+        const numConnections = Math.floor(Math.random() * 2) + 1;
         const shuffled = possibleConnections.sort(() => Math.random() - 0.5);
 
         for (let j = 0; j < Math.min(numConnections, shuffled.length); j++) {
@@ -70,50 +79,54 @@ export default function CircuitBoard() {
     return () => window.removeEventListener("resize", generateNodes);
   }, []);
 
-  // Animate pulses
+  // Animate pulses using requestAnimationFrame
   useEffect(() => {
     if (nodes.length === 0) return;
 
-    const spawnPulse = () => {
-      const nodeWithConnections = nodes.filter((n) => n.connections.length > 0);
-      if (nodeWithConnections.length === 0) return;
+    let lastSpawnTime = 0;
+    const spawnInterval = 800; // Spawn less frequently
 
-      const fromNode = nodeWithConnections[Math.floor(Math.random() * nodeWithConnections.length)];
-      const toNodeId = fromNode.connections[Math.floor(Math.random() * fromNode.connections.length)];
+    const animate = (timestamp: number) => {
+      // Spawn new pulses
+      if (timestamp - lastSpawnTime > spawnInterval) {
+        lastSpawnTime = timestamp;
+        const nodeWithConnections = nodes.filter((n) => n.connections.length > 0);
+        if (nodeWithConnections.length > 0) {
+          const fromNode = nodeWithConnections[Math.floor(Math.random() * nodeWithConnections.length)];
+          const toNodeId = fromNode.connections[Math.floor(Math.random() * fromNode.connections.length)];
 
-      setPulses((prev) => [
-        ...prev,
-        {
-          id: pulseIdRef.current++,
-          fromNode: fromNode.id,
-          toNode: toNodeId,
-          progress: 0,
-          speed: 0.01 + Math.random() * 0.02,
-        },
-      ]);
-    };
+          setPulses((prev) => {
+            // Limit max pulses
+            if (prev.length >= 8) return prev;
+            return [...prev, {
+              id: pulseIdRef.current++,
+              fromNode: fromNode.id,
+              toNode: toNodeId,
+              progress: 0,
+              speed: 0.015 + Math.random() * 0.015,
+            }];
+          });
+        }
+      }
 
-    // Spawn pulses periodically
-    const spawnInterval = setInterval(spawnPulse, 500);
-
-    // Animation loop
-    const animate = () => {
+      // Update pulses
       setPulses((prev) =>
         prev
           .map((pulse) => ({ ...pulse, progress: pulse.progress + pulse.speed }))
           .filter((pulse) => pulse.progress < 1)
       );
+
+      animationRef.current = requestAnimationFrame(animate);
     };
 
-    const animationInterval = setInterval(animate, 16);
+    animationRef.current = requestAnimationFrame(animate);
 
     return () => {
-      clearInterval(spawnInterval);
-      clearInterval(animationInterval);
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
     };
   }, [nodes]);
-
-  const getNodeById = (id: number) => nodes.find((n) => n.id === id);
 
   return (
     <div ref={containerRef} className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
@@ -158,7 +171,7 @@ export default function CircuitBoard() {
           </g>
         ))}
 
-        {/* Animated pulses */}
+        {/* Animated pulses - simplified without blur */}
         {pulses.map((pulse) => {
           const fromNode = getNodeById(pulse.fromNode);
           const toNode = getNodeById(pulse.toNode);
@@ -169,13 +182,12 @@ export default function CircuitBoard() {
 
           return (
             <g key={pulse.id}>
-              {/* Pulse glow */}
+              {/* Pulse glow - no blur filter */}
               <circle
                 cx={x}
                 cy={y}
-                r="12"
-                fill="rgba(139, 92, 246, 0.3)"
-                style={{ filter: "blur(4px)" }}
+                r="10"
+                fill="rgba(139, 92, 246, 0.2)"
               />
               {/* Pulse core */}
               <circle cx={x} cy={y} r="4" fill="rgba(139, 92, 246, 0.8)" />
@@ -184,22 +196,12 @@ export default function CircuitBoard() {
         })}
       </svg>
 
-      {/* Animated highlight nodes */}
-      {nodes.slice(0, 10).map((node, i) => (
-        <motion.div
+      {/* Static highlight nodes - no animation */}
+      {nodes.slice(0, 5).map((node) => (
+        <div
           key={`highlight-${node.id}`}
-          className="absolute w-2 h-2 rounded-full bg-cyan-400"
+          className="absolute w-2 h-2 rounded-full bg-cyan-400 opacity-50"
           style={{ left: node.x - 4, top: node.y - 4 }}
-          animate={{
-            opacity: [0.2, 0.8, 0.2],
-            scale: [1, 1.5, 1],
-          }}
-          transition={{
-            duration: 2 + i * 0.3,
-            repeat: Infinity,
-            ease: "easeInOut",
-            delay: i * 0.5,
-          }}
         />
       ))}
     </div>

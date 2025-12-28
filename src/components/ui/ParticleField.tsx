@@ -26,7 +26,6 @@ function useIsMobile() {
 function Particles({ count, mouse, isMobile }: { count: number; mouse: React.RefObject<{ x: number; y: number }>; isMobile: boolean }) {
   const mesh = useRef<THREE.Points>(null);
   const velocities = useRef<Float32Array>(new Float32Array(count * 3));
-  const frameSkip = useRef(0);
 
   const [positions, originalPositions, colors] = useMemo(() => {
     const pos = new Float32Array(count * 3);
@@ -71,22 +70,11 @@ function Particles({ count, mouse, isMobile }: { count: number; mouse: React.Ref
   useFrame((state) => {
     if (!mesh.current) return;
 
-    // Skip frames on mobile for better performance
-    if (isMobile) {
-      frameSkip.current++;
-      if (frameSkip.current % 2 !== 0) return; // Run at 30fps on mobile
-    }
-
     const time = state.clock.getElapsedTime();
 
     // Rotate particles slowly
     mesh.current.rotation.y = time * 0.05;
     mesh.current.rotation.x = time * 0.03;
-
-    // Skip per-particle updates on mobile - just rotate
-    if (isMobile) {
-      return;
-    }
 
     // Get position attribute
     const posAttr = mesh.current.geometry.attributes.position;
@@ -96,42 +84,37 @@ function Particles({ count, mouse, isMobile }: { count: number; mouse: React.Ref
     // Convert mouse position to 3D space
     const mouseX = mouse.current ? mouse.current.x * 5 : 0;
     const mouseY = mouse.current ? mouse.current.y * 5 : 0;
-    const pushRadius = 0.4; // Very tight radius of mouse influence
-    const pushStrength = 0.25; // How strongly particles are pushed
+    const pushRadius = 0.4;
+    const pushStrength = 0.25;
+    const pushRadiusSq = pushRadius * pushRadius; // Pre-calculate squared radius
 
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
 
-      // Calculate distance from mouse in 2D (x, y plane)
+      // Calculate distance from mouse (avoid sqrt when possible)
       const dx = posArray[i3] - mouseX;
       const dy = posArray[i3 + 1] - mouseY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+      const distSq = dx * dx + dy * dy;
 
-      // Push particles away from mouse
-      if (dist < pushRadius && dist > 0.01) {
+      // Push particles away from mouse (only calculate sqrt if within range)
+      if (distSq < pushRadiusSq && distSq > 0.0001) {
+        const dist = Math.sqrt(distSq);
         const force = (1 - dist / pushRadius) * pushStrength;
-        vel[i3] += (dx / dist) * force;
-        vel[i3 + 1] += (dy / dist) * force;
+        const invDist = 1 / dist;
+        vel[i3] += dx * invDist * force;
+        vel[i3 + 1] += dy * invDist * force;
       }
 
-      // Apply velocity
-      posArray[i3] += vel[i3];
-      posArray[i3 + 1] += vel[i3 + 1];
-      posArray[i3 + 2] += vel[i3 + 2];
-
-      // Spring back to original position
+      // Apply velocity and spring back combined
       const springStrength = 0.02;
-      posArray[i3] += (originalPositions[i3] - posArray[i3]) * springStrength;
-      posArray[i3 + 1] += (originalPositions[i3 + 1] - posArray[i3 + 1]) * springStrength;
-      posArray[i3 + 2] += (originalPositions[i3 + 2] - posArray[i3 + 2]) * springStrength;
+      posArray[i3] += vel[i3] + (originalPositions[i3] - posArray[i3]) * springStrength;
+      posArray[i3 + 1] += vel[i3 + 1] + (originalPositions[i3 + 1] - posArray[i3 + 1]) * springStrength;
+      posArray[i3 + 2] += vel[i3 + 2] + (originalPositions[i3 + 2] - posArray[i3 + 2]) * springStrength;
 
       // Dampen velocity
       vel[i3] *= 0.92;
       vel[i3 + 1] *= 0.92;
       vel[i3 + 2] *= 0.92;
-
-      // Add gentle floating animation
-      posArray[i3 + 1] += Math.sin(time + i * 0.1) * 0.001;
     }
 
     posAttr.needsUpdate = true;
@@ -175,8 +158,8 @@ function Scene({ mouse, isMobile }: { mouse: React.RefObject<{ x: number; y: num
     }
   });
 
-  // Use fewer particles on mobile (150 vs 500)
-  const particleCount = isMobile ? 150 : 500;
+  // Use fewer particles on mobile (300 vs 500)
+  const particleCount = isMobile ? 300 : 500;
 
   return <Particles count={particleCount} mouse={mouse} isMobile={isMobile} />;
 }
